@@ -1,0 +1,97 @@
+# Dependencies
+node_modules/
+Backend/node_modules/
+
+# Environment / secrets
+.env
+.env.*
+Backend.env
+Backend.env.*
+Backend/.env
+Backend/.env.*
+!Backend.env.example
+
+# Firebase / service credentials
+Backend/serviceAccountKey.json
+serviceAccountKey.json
+**/*serviceAccount*.json
+**/*firebase*key*.json
+
+# Local storage / uploaded media
+storage/
+**/storage/
+
+# Generated build output
+dist/
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local development files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# ==========================================
+# GeoSurvey - Root Git Ignore
+# ==========================================
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment variables & secrets
+.env
+.env.*
+**/.env
+**/.env.*
+Backend/.env
+
+# Firebase / service account credentials
+serviceAccountKey.json
+**/serviceAccountKey.json
+**/*serviceAccount*.json
+
+# Local storage / real survey media
+storage/
+**/storage/
+
+# Generated build files
+dist/
+**/dist/
+coverage/
+**/coverage/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# Temporary files
+*.tmp
+*.temp
+
+# Local database files
+*.sqlite
+*.sqlite3

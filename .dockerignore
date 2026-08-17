@@ -1,0 +1,48 @@
+# Dependencies (installed fresh in the image)
+node_modules
+Backend/node_modules
+
+# Secrets — never baked into the image. Mounted in at runtime instead
+# (see docker-compose.yml). This is the same reasoning as Backend/.gitignore.
+.env
+.env.*
+!.env.example
+Backend/.env
+Backend/.env.*
+!Backend/.env.example
+serviceAccountKey.json
+**/serviceAccountKey.json
+
+# Real uploaded submission data — lives on a named volume at runtime,
+# never in the image.
+storage/
+Backend/storage/
+
+# Git / CI
+.git
+.github
+
+# Editor/OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+*.lnk
+
+# Build/test output
+dist
+coverage
+*.log
+npm-debug.log*
+
+# Not needed to run the Express API — keeps the build context small
+# and out of the backend image entirely.
+PWA
+Backup System
+Firebase Authentication
+File Storage System
+Monitoring
+Security
+scripts
+*.md
+*.pdf
