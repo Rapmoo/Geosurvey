@@ -1,0 +1,16 @@
+{
+  "name": "geosurvey-functions",
+  "version": "1.0.0",
+  "description": "Cloud Function entry point for GeoSurvey (push notification delivery). Deployed via `firebase deploy --only functions` using firebase.json's functions.source: \"Backend\". This package.json is separate from the root one (which drives the Express API via `npm start`/`npm test`) because Cloud Functions needs its own dependency-light manifest with `main` pointing at index.js.",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "firebase-admin": "^12.3.1",
+    "firebase-functions": "^6.0.1",
+    "helmet": "^8.3.0"
+  },
+  "private": true
+}
