@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GeoSurvey — Field Data Collection Platform</title>
+<link rel="manifest" href="./manifest.json" />
+<meta name="theme-color" content="#1B2B24" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="GeoSurvey" />
+<link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="./icons/favicon-16.png" />
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<!-- Leaflet.markercluster — groups nearby markers (used for the Satellite
+     photo-thumbnail layer, see initAdminMap/renderPhotoThumbnails below) so
+     thumbnails collected close together collapse into a single cluster
+     bubble instead of piling up on top of each other. Same unpkg-hosted,
+     cache-first-via-sw.js approach as the rest of Leaflet/its plugins. -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Ethiopic:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./css/styles.css">
+</head>
+<body>
+<div id="root">
+
+  <!-- ================= AUTH CHECK (initial session restore) ================= -->
+  <div id="auth-checking"><div class="spinner"></div></div>
+
+  <!-- ================= LOGIN ================= -->
+  <div id="login-screen">
+    <div class="login-card">
+      <div class="login-brand"><div class="mark">G</div><span>GeoSurvey</span></div>
+      <div class="login-sub" data-i18n="login_sub">Sign in to continue</div>
+      <div class="login-error" id="login-error" data-i18n="login_error">Invalid email or password for this role.</div>
+      <div class="login-success" id="login-success"></div>
+      <label class="field-label" data-i18n="email">Email</label>
+      <input class="input" id="login-email" type="email" />
+      <label class="field-label" data-i18n="password">Password</label>
+      <input class="input" id="login-password" type="password" />
+      <button class="btn-primary" id="login-btn" data-i18n="sign_in">Sign in</button>
+      <div class="login-hint" id="bootstrap-prompt" style="display:none;">
+        No admin account exists yet — <a href="#" id="bootstrap-link" style="color:var(--clay);font-weight:600;">set up the first admin</a>
+      </div>
+    </div>
+
+    <!-- ============ FIRST-ADMIN BOOTSTRAP (only offered while no admin exists yet) ============ -->
+    <div class="login-card" id="bootstrap-card" style="display:none;">
+      <div class="login-brand"><div class="mark">G</div><span>GeoSurvey</span></div>
+      <div class="login-sub">Create the first admin account</div>
+      <div class="login-error" id="bootstrap-error" style="display:none;"></div>
+      <label class="field-label">Full name</label>
+      <input class="input" id="bootstrap-name" type="text" autocomplete="name" />
+      <label class="field-label">Email</label>
+      <input class="input" id="bootstrap-email" type="email" autocomplete="email" />
+      <label class="field-label">Password</label>
+      <input class="input" id="bootstrap-password" type="password" autocomplete="new-password" />
+      <label class="field-label">Confirm password</label>
+      <input class="input" id="bootstrap-confirm" type="password" autocomplete="new-password" />
+      <button class="btn-primary" id="bootstrap-confirm-btn">Create admin account</button>
+      <div class="login-hint"><a href="#" id="bootstrap-back-link" style="color:var(--ink-soft);">&larr; Back to sign in</a></div>
+    </div>
+  </div>
+
+  <!-- ================= APP SHELL ================= -->
+  <div id="app-screen">
+    <div id="connectivity-banner" style="display:none;">
+      <span>🔌</span>
+      <span data-i18n="conn_banner_text">You're offline — showing cached data. Changes will sync automatically once you're back online.</span>
+    </div>
+    <div class="shell">
+      <div class="sidebar" id="sidebar">
+        <div class="brand"><div class="mark">G</div><span>GeoSurvey</span></div>
+        <div id="nav-items"></div>
+        <div class="sidebar-foot">
+          <div class="lang-toggle">
+            <button id="lang-en" class="active">EN</button>
+            <button id="lang-am">አማ</button>
+          </div>
+          <div class="user-chip">
+            <div class="av" id="user-av">A</div>
+            <div class="info"><div id="user-name">—</div><div id="user-role">—</div></div>
+          </div>
+          <div class="sidebar-worker-stats" id="sidebar-worker-stats" style="display:none;">
+            <div class="sw-stat"><span class="sw-num" id="side-stat-submitted">0</span><span class="sw-lbl" data-i18n="submitted">Submitted</span></div>
+            <div class="sw-stat"><span class="sw-num" id="side-stat-sync">0</span><span class="sw-lbl" data-i18n="pending_sync">Pending Sync</span></div>
+          </div>
+          <div class="sidebar-admin-stats" id="sidebar-admin-stats" style="display:none;">
+            <div class="sa-stat sa-total"><span class="sa-num" id="side-stat-total">0</span><span class="sa-lbl" data-i18n="stat_total">Approved Submissions</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+
+      <div class="main" id="main">
+        <div class="topbar">
+          <div class="topbar-left">
+            <button class="hamburger-btn" id="hamburger-btn" aria-label="Menu">☰</button>
+            <div><h1 id="view-title">—</h1><div class="sub" id="view-sub"></div></div>
+          </div>
+          <div class="topbar-right" id="topbar-right" style="display:none;">
+            <button class="notif-bell-btn" id="pwa-refresh-btn" aria-label="Refresh" title="Refresh" style="margin-right:8px;">
+              ⟳
+            </button>
+            <div class="notif-bell-wrap">
+              <button class="notif-bell-btn" id="notif-bell-btn" aria-label="Alerts" title="Alerts">
+                🔔<span class="notif-bell-badge" id="notif-bell-badge" style="display:none;">0</span>
+              </button>
+              <div class="notif-dropdown" id="notif-dropdown">
+                <div class="notif-dropdown-head-row">
+                  <div class="notif-dropdown-head" data-i18n="alerts">Alerts</div>
+                  <button class="notif-clear-all-btn" id="notif-clear-all-btn" type="button" style="display:none;"></button>
+                </div>
+                <div id="notif-dropdown-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== ADMIN: OVERVIEW ===== -->
+        <div class="view" id="view-admin-overview">
+          <!-- System alerts fed by internal monitoring scripts (e.g.
+               scripts/monitor-disk-space.ps1) via POST /api/system/alerts,
+               read here via GET /api/admin/system-alerts. Separate from
+               the worker-facing bell in the topbar, which is driven by
+               the Firestore "notifications" collection instead — this
+               panel talks to the Express backend directly since these
+               alerts never touch client-writable Firestore at all. -->
+          <div class="panel" id="system-alerts-panel" style="display:none;">
+            <div class="panel-head">
+              <h3 data-i18n="system_alerts">System Alerts</h3>
+              <button class="btn-outline-teal" id="system-alerts-refresh-btn" type="button" data-i18n="refresh">Refresh</button>
+            </div>
+            <div id="system-alerts-list"></div>
+          </div>
+          <div class="map-panel">
+            <div id="map"></div>
+            <div class="map-controls" id="map-controls">
+              <button class="map-controls-toggle" id="map-controls-toggle">
+                <span>🗂 <span data-i18n="layers">Layers</span></span>
+                <span id="map-controls-chevron">▾</span>
+              </button>
+              <div class="map-controls-body">
+                <div class="layer-group">
+                  <div class="g-title" data-i18n="base_layer">Base Layer</div>
+                  <div class="layer-opt"><input type="radio" name="baselayer" value="street" checked id="bl-street"><label for="bl-street" data-i18n="street">Street</label></div>
+                  <div class="layer-opt"><input type="radio" name="baselayer" value="satellite" id="bl-sat"><label for="bl-sat" data-i18n="satellite">Satellite</label></div>
+                </div>
+                <div class="layer-group">
+                  <div class="g-title" data-i18n="overlay">Overlay</div>
+                  <div class="layer-opt"><input type="checkbox" id="ov-heatmap"><label for="ov-heatmap" data-i18n="heatmap">Heatmap</label></div>
+                </div>
+                <div class="layer-group">
+                  <div class="g-title" data-i18n="legend">Legend</div>
+                  <div class="layer-opt"><span class="legend-dot" style="background:#6B7A3F"></span><span data-i18n="l_approved">Approved</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h3 data-i18n="all_submissions">All Submissions</h3>
+              <div class="filters">
+                <select id="f-worker"><option value="" data-i18n="all_workers">All workers</option></select>
+                <select id="f-sort"><option value="desc" data-i18n="sort_newest">Newest first</option><option value="asc" data-i18n="sort_oldest">Oldest first</option></select>
+              </div>
+            </div>
+            <div class="table-scroll">
+            <table>
+              <thead><tr>
+                <th data-i18n="th_form">Form</th><th data-i18n="th_worker">Worker</th><th data-i18n="th_lng">Longitude</th><th data-i18n="th_lat">Latitude</th>
+                <th data-i18n="th_status">Status</th><th data-i18n="th_date">Collected</th><th></th><th></th><th></th>
+              </tr></thead>
+              <tbody id="admin-table-body"></tbody>
+            </table>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h3 data-i18n="worker_activity">Worker Activity</h3>
+            </div>
+            <div class="table-scroll">
+            <table>
+              <thead><tr>
+                <th data-i18n="th_worker">Worker</th><th data-i18n="th_status_col">Status</th>
+                <th data-i18n="th_total">Approved Submissions</th>
+                <th data-i18n="th_last_active">Last Active</th>
+              </tr></thead>
+              <tbody id="worker-activity-body"></tbody>
+            </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== ADMIN: FORM BUILDER ===== -->
+        <div class="view" id="view-admin-builder">
+          <div class="builder-grid">
+            <div class="panel builder-sidebar">
+              <div class="panel-head" style="margin-bottom:12px;">
+                <h3 data-i18n="your_forms">Your Forms</h3>
+              </div>
+              <button class="btn-primary" id="new-form-btn" style="width:100%;margin-bottom:10px;" data-i18n="new_form">+ New form</button>
+              <button class="btn-outline-teal" id="import-form-btn" style="width:100%;margin-bottom:10px;" data-i18n="import_form" title="Import a .json export from this builder, or an .xlsx with a 'label' column (plus optional type/required/options columns).">📁 Import form…</button>
+              <input type="file" id="import-form-file" accept="application/json,.json,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none;" />
+              <div id="template-list"></div>
+            </div>
+
+            <div class="panel builder-main">
+              <div class="panel-head" style="align-items:center;">
+                <input class="input" id="builder-form-name" style="margin-bottom:0;font-size:16px;font-weight:700;font-family:'Fraunces',serif;max-width:340px;" />
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <label class="layer-opt" style="font-size:12.5px;"><input type="checkbox" id="builder-form-active" /> <span data-i18n="set_active">Set as active form</span></label>
+                  <button class="btn-export" id="save-template-btn" data-i18n="save_form">Save form</button>
+                  <button class="btn-outline-teal" id="save-as-template-btn" style="width:auto;" data-i18n="save_as_template">📚 Save Template</button>
+                  <button class="btn-outline-teal" id="export-json-btn" style="width:auto;" data-i18n="export_form_json">⬇ JSON</button>
+                  <button class="btn-outline-teal" id="export-xlsx-btn" style="width:auto;" data-i18n="export_form_xlsx">⬇ Excel</button>
+                  <button class="btn-send" id="send-template-btn" data-i18n="send_to_worker">Send to worker</button>
+                  <button class="btn-danger-outline" id="delete-template-btn" data-i18n="delete_form">Delete form</button>
+                </div>
+              </div>
+              <textarea class="input" id="builder-form-description" rows="2" data-i18n-placeholder="form_description_placeholder" placeholder="Describe what this form is for…" style="resize:vertical;font-size:13px;margin-bottom:14px;"></textarea>
+              <p style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 4px;" data-i18n="builder_sub">Drag questions to reorder. This defines what field workers see in the PWA.</p>
+              <p style="font-size:11.5px;color:var(--ink-soft);opacity:0.7;margin:-2px 0 18px;" data-i18n="save_as_template_hint">"Save form" updates the live working copy. "Save Template" snapshots the current questions as a new, reusable version in Survey Templates — it never overwrites an earlier version.</p>
+
+              <div id="question-list"></div>
+
+              <div class="add-question-zone">
+                <div class="fl" style="margin-bottom:10px;" data-i18n="add_question">Add a question</div>
+                <div class="qtype-palette" id="qtype-palette"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== ADMIN: SURVEY TEMPLATES ===== -->
+        <div class="view" id="view-admin-templates">
+          <div class="panel">
+            <div class="panel-head">
+              <h3 data-i18n="survey_templates_title">Survey Templates</h3>
+            </div>
+            <p style="font-size:13px;color:var(--ink-soft);margin:-6px 0 16px;" data-i18n="survey_templates_sub">Every "Save Template" click in the Form Builder adds a new version here — earlier versions are kept, never overwritten. Use any of them to start a new survey.</p>
+            <div id="survey-templates-empty" class="q-empty" style="display:none;" data-i18n="no_templates_yet">No templates saved yet. Open a form in the Form Builder and click "Save Template".</div>
+            <div class="table-scroll" id="survey-templates-table-wrap">
+            <table>
+              <thead><tr>
+                <th data-i18n="th_tpl_name">Template Name</th>
+                <th data-i18n="th_tpl_description">Description</th>
+                <th data-i18n="th_tpl_kobo_id">Original Kobo Form ID</th>
+                <th data-i18n="th_tpl_version">Version</th>
+                <th data-i18n="th_tpl_imported">Date Imported</th>
+                <th data-i18n="th_tpl_modified">Date Modified</th>
+                <th data-i18n="th_tpl_created_by">Created By</th>
+                <th></th>
+              </tr></thead>
+              <tbody id="survey-templates-table-body"></tbody>
+            </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== ADMIN: USERS ===== -->
+        <div class="view" id="view-admin-users">
+          <div class="panel">
+            <div class="panel-head">
+              <h3 data-i18n="manage_users">Manage Users</h3>
+              <button class="btn-primary" id="new-user-btn" style="width:auto;padding:9px 16px;" data-i18n="new_user_btn">+ New user</button>
+            </div>
+            <div class="table-scroll">
+            <table>
+              <thead><tr><th data-i18n="th_name">Name</th><th data-i18n="th_email">Email</th><th data-i18n="th_role">Role</th><th data-i18n="th_supervisor">Supervisor</th><th data-i18n="th_status_col">Status</th><th></th></tr></thead>
+              <tbody id="users-table-body"></tbody>
+            </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== ADMIN: VERSION HISTORY ===== -->
+        <div class="view" id="view-admin-versions">
+          <div class="panel">
+            <div class="panel-head">
+              <h3 data-i18n="version_history">Version History</h3>
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;cursor:pointer;">
+                  <input type="checkbox" id="versions-select-all" style="width:15px;height:15px;accent-color:var(--clay);" /> <span data-i18n="select_all">Select all</span>
+                </label>
+                <button class="btn-export" style="background:var(--red);width:auto;padding:8px 14px;font-size:12.5px;" id="delete-versions-btn" disabled>🗑 Delete selected (0)</button>
+              </div>
+            </div>
+            <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px;" data-i18n="version_sub">Edits to reviewed submissions will be tracked here, old vs. new, side by side.</p>
+            <div id="versions-list"></div>
+          </div>
+        </div>
+
+        <!-- ===== ADMIN: SETTINGS ===== -->
+        <div class="view" id="view-admin-settings">
+          <div class="panel" style="max-width:520px;">
+            <div class="panel-head"><h3 data-i18n="system_settings">System Settings</h3></div>
+            <div class="pwa-field">
+              <label data-i18n="interface_lang">Interface language</label>
+              <select class="input" id="settings-lang-select" style="margin-bottom:0;">
+                <option value="en">English</option>
+                <option value="am">አማርኛ (Amharic)</option>
+              </select>
+            </div>
+            <div class="pwa-field" style="margin-top:16px;">
+              <label data-i18n="default_export">Default export format</label>
+              <select class="input" id="settings-export-select" style="margin-bottom:0;">
+                <option>GeoJSON</option><option>Shapefile</option><option>Excel</option>
+              </select>
+            </div>
+            <div class="pwa-field" style="margin-top:16px;">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+                <input type="checkbox" id="settings-allow-poor-gps" style="width:auto;margin:0;" />
+                <span data-i18n="allow_poor_gps">Allow workers to submit with poor GPS accuracy (>20m)</span>
+              </label>
+              <div style="font-size:11.5px;color:var(--ink-soft);opacity:0.7;margin-top:4px;" data-i18n="allow_poor_gps_sub">When off, workers must Retry or Cancel instead of Save Anyway if the required GPS accuracy can't be reached.</div>
+            </div>
+          </div>
+
+          <div class="panel" style="max-width:560px;">
+            <div class="panel-head"><h3>Manage submissions</h3></div>
+            <p style="font-size:12.5px;color:var(--ink-soft);margin:-6px 0 16px;">
+              Pick specific approved submissions to permanently delete from Firestore, or select
+              all. Across all workers. Pending and rejected submissions aren't shown here —
+              those are a supervisor's to review. To manage accounts (supervisors and field
+              workers), use <strong>Manage Users</strong> instead.
+            </p>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;cursor:pointer;">
+                <input type="checkbox" id="clear-subs-select-all" style="width:15px;height:15px;accent-color:var(--clay);" /> Select all
+              </label>
+              <button class="q-icon-btn" id="clear-subs-refresh" title="Refresh list" style="width:auto;padding:5px 10px;font-size:11.5px;">⟳ Refresh</button>
+            </div>
+            <div id="clear-subs-list" style="max-height:300px;overflow-y:auto;border:1.5px solid var(--line);border-radius:8px;padding:8px;margin-bottom:12px;background:var(--paper);"></div>
+            <button class="btn-export" style="background:var(--red);width:auto;padding:11px 20px;" id="clear-submissions-btn" disabled>🗑 Delete selected (0)</button>
+            <div id="clear-submissions-status" style="font-size:12px;color:var(--ink-soft);margin-top:10px;"></div>
+          </div>
+        </div>
+
+        <!-- ===== ADMIN: KOBO IMPORT ===== -->
+        <div class="view" id="view-admin-import">
+          <div class="panel" id="kobo-connect-panel">
+            <div class="panel-head">
+              <h3 data-i18n="kobo_connect_title">Connect to KoboToolbox</h3>
+              <span class="stamp" id="kobo-conn-status" style="color:var(--ink-soft);">● <span data-i18n="kobo_not_connected">Not connected</span></span>
+            </div>
+            <p style="font-size:13px;color:var(--ink-soft);margin:-6px 0 18px;" data-i18n="kobo_connect_sub">Connect your KoboToolbox account to pull in existing forms and submissions.</p>
+            <!-- Hidden once connected -- there's nothing to fill in while an
+                 account is already linked, and the single Connect/Disconnect
+                 button below covers both directions. -->
+            <div id="kobo-credentials-fields">
+              <div class="field-grid" style="grid-template-columns:1fr 1fr;margin-bottom:0;">
+                <div class="field-block">
+                  <div class="fl" data-i18n="kobo_server">Server</div>
+                  <select class="input" id="kobo-server" style="margin-bottom:0;">
+                    <option value="kf.kobotoolbox.org">kf.kobotoolbox.org (Global)</option>
+                    <option value="eu.kobotoolbox.org">eu.kobotoolbox.org (EU)</option>
+                    <option value="custom">Custom server URL…</option>
+                  </select>
+                </div>
+                <div class="field-block">
+                  <div class="fl" data-i18n="kobo_token">API Token</div>
+                  <input class="input" id="kobo-token" style="margin-bottom:0;" type="password" placeholder="Paste your Kobo API token" />
+                </div>
+              </div>
+              <div id="kobo-custom-url-wrap" style="display:none;margin-top:14px;">
+                <div class="fl" data-i18n="kobo_custom_url">Custom server URL</div>
+                <input class="input" id="kobo-custom-url" style="margin-bottom:0;" placeholder="https://kobo.yourorg.org" />
+              </div>
+              <div style="font-size:11.5px;color:var(--ink-soft);opacity:0.6;margin-top:10px;" data-i18n="kobo_token_help">Find your token in Kobo under Account Settings → Security. It's never stored on our servers.</div>
+            </div>
+            <!-- Single toggle button: "Connect account" while disconnected,
+                 "Disconnect" while connected -- see updateKoboConnectButtonUI()
+                 and the shared performKoboDisconnect() it calls into. -->
+            <button class="btn-primary" id="kobo-connect-btn" style="width:auto;padding:11px 22px;margin-top:16px;" data-i18n="kobo_connect_btn">Connect account</button>
+          </div>
+
+          <div class="panel" id="kobo-forms-panel" style="display:none;">
+            <div class="panel-head">
+              <h3 data-i18n="kobo_forms_title">Available Forms</h3>
+              <div style="display:flex;align-items:center;gap:14px;">
+                <button class="row-link" id="kobo-view-forms-btn" data-i18n="kobo_view_forms_btn">View Forms</button>
+                <!-- Disconnecting now happens via the toggled button in
+                     kobo-connect-panel above -- this button is superseded by
+                     that but kept in the DOM (just hidden) since JS still
+                     binds a handler to it by id; removing the element outright
+                     would throw on that binding. -->
+                <button class="row-link" id="kobo-disconnect-btn" data-i18n="kobo_disconnect" style="display:none;">Disconnect</button>
+              </div>
+            </div>
+            <p style="font-size:13px;color:var(--ink-soft);margin:-6px 0 16px;" data-i18n="kobo_forms_sub">Select one or more forms to import. Duplicate submissions are skipped automatically.</p>
+            <div id="kobo-form-list"></div>
+
+            <!-- Field Mapping: kept in the DOM/code (mapping data still feeds
+                 the import) but hidden from the admin -- this table only
+                 ever showed a static, hardcoded example mapping rather than
+                 anything reflecting the actually-selected Kobo form, so
+                 showing it as if it were live/editable was misleading. -->
+            <div id="kobo-field-mapping-section" style="display:none;">
+              <div class="panel-head" style="margin-top:24px;padding-top:18px;border-top:1px solid var(--line);">
+                <h3 data-i18n="kobo_mapping_title">Field Mapping</h3>
+              </div>
+              <p style="font-size:13px;color:var(--ink-soft);margin:-6px 0 14px;" data-i18n="kobo_mapping_sub">GeoSurvey matched these fields automatically. Adjust if anything looks off.</p>
+              <div class="table-scroll">
+              <table>
+                <thead><tr><th data-i18n="kobo_field_col">Kobo field</th><th></th><th data-i18n="geosurvey_field_col">GeoSurvey field</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">_geolocation</td><td>→</td><td><select class="input" style="margin-bottom:0;padding:6px 9px;"><option>GPS location</option></select></td></tr>
+                  <tr><td class="mono">audio_memo</td><td>→</td><td><select class="input" style="margin-bottom:0;padding:6px 9px;"><option>Voice memo</option></select></td></tr>
+                  <tr><td class="mono">respondent_name</td><td>→</td><td><select class="input" style="margin-bottom:0;padding:6px 9px;"><option>Household name</option></select></td></tr>
+                  <tr><td class="mono">ward / kebele</td><td>→</td><td><select class="input" style="margin-bottom:0;padding:6px 9px;"><option>Region / Kebele</option></select></td></tr>
+                  <tr><td class="mono">_submission_time</td><td>→</td><td><select class="input" style="margin-bottom:0;padding:6px 9px;"><option>Collected timestamp</option></select></td></tr>
+                </tbody>
+              </table>
+              </div>
+            </div>
+
+            <button class="btn-primary" id="kobo-import-btn" style="width:auto;padding:12px 24px;margin-top:20px;" disabled data-i18n="kobo_import_btn">Import selected forms</button>
+          </div>
+
+          <!-- View Forms browser: every Kobo project/form (draft, deployed,
+               or archived), pulled live from GET /api/kobo/forms/overview.
+               Purely a read-only catalog -- selecting/importing still
+               happens in the Available Forms panel above via
+               kobo-form-list. Toggled by #kobo-view-forms-btn. -->
+          <div class="panel" id="kobo-view-forms-panel" style="display:none;">
+            <div class="panel-head">
+              <h3 data-i18n="kobo_view_forms_title">Kobo Forms</h3>
+              <button class="row-link" id="kobo-view-forms-close-btn" data-i18n="kobo_view_forms_close">Close</button>
+            </div>
+            <div class="kobo-vf-toolbar">
+              <input class="input" id="kobo-vf-search" type="text" data-i18n-placeholder="kobo_vf_search_placeholder" placeholder="Search forms by name…" />
+              <button class="q-icon-btn" id="kobo-vf-refresh" style="width:auto;padding:9px 14px;font-size:12px;" data-i18n="kobo_vf_refresh">⟳ Refresh</button>
+              <span class="kobo-vf-count" id="kobo-vf-count"></span>
+            </div>
+            <div id="kobo-vf-loading" class="kobo-vf-state" style="display:none;"><span class="spin">⟳</span> <span data-i18n="kobo_vf_loading">Loading forms from KoboToolbox…</span></div>
+            <div id="kobo-vf-error" class="kobo-vf-state error" style="display:none;"></div>
+            <div id="kobo-vf-empty" class="kobo-vf-state" style="display:none;" data-i18n="kobo_vf_empty">No forms match your search.</div>
+            <div class="table-scroll" id="kobo-vf-table-wrap" style="display:none;">
+              <table class="kobo-vf-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="kobo_vf_col_name">Form Name</th>
+                    <th data-i18n="kobo_vf_col_id">Form ID</th>
+                    <th data-i18n="kobo_vf_col_owner">Owner</th>
+                    <th data-i18n="kobo_vf_col_created">Date Created</th>
+                    <th data-i18n="kobo_vf_col_count">Submissions</th>
+                    <th data-i18n="kobo_vf_col_status">Status</th>
+                    <th data-i18n="kobo_vf_col_actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="kobo-vf-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel" id="kobo-progress-panel" style="display:none;">
+            <div class="panel-head"><h3 data-i18n="kobo_importing_title">Importing…</h3></div>
+            <div id="kobo-progress-list"></div>
+          </div>
+
+          <div class="panel" id="kobo-result-panel" style="display:none;">
+            <div class="panel-head"><h3 data-i18n="kobo_done_title">Import complete</h3></div>
+            <div class="stats-row" style="margin-bottom:0;">
+              <div class="stat-card approved"><div class="num" id="kobo-result-imported">0</div><div class="lbl" data-i18n="kobo_imported">Imported</div></div>
+              <div class="stat-card"><div class="num" id="kobo-result-skipped">0</div><div class="lbl" data-i18n="kobo_skipped">Duplicates skipped</div></div>
+              <div class="stat-card rejected"><div class="num" id="kobo-result-failed">0</div><div class="lbl" data-i18n="kobo_failed">Failed</div></div>
+            </div>
+            <div id="kobo-result-forms" style="margin-top:18px;"></div>
+            <button class="row-link" id="kobo-import-more-btn" style="margin-top:16px;" data-i18n="kobo_import_more">← Import more forms</button>
+          </div>
+        </div>
+
+        <!-- ===== SUPERVISOR: QUEUE ===== -->
+        <div class="view" id="view-supervisor-queue">
+          <div class="queue-grid">
+            <div class="queue-list" id="queue-list"></div>
+            <div class="review-panel" id="review-panel">
+              <div class="empty-state">
+                <div class="display" data-i18n="select_submission">Select a submission</div>
+                <div data-i18n="select_submission_sub">Choose an item from the pending queue to review its data and voice memo.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== WORKER PWA ===== -->
+        <div class="view" id="view-worker">
+          <div class="pwa-frame">
+            <div class="pwa-body">
+              <div class="pwa-topline">
+                <span class="stamp" id="pwa-online-label">🟢 <span data-i18n="online">Online</span></span>
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <span id="pwa-clock" class="mono"></span>
+                  <button class="pwa-sim-btn" id="pwa-offline-toggle" title="Simulate offline (demo)">🔌</button>
+                </div>
+              </div>
+              <div class="pwa-tabs" style="display:none;">
+                <button class="pwa-tab active" id="pwa-tab-new" data-i18n="tab_new">New Submission</button>
+                <button class="pwa-tab" id="pwa-tab-history" data-i18n="tab_history">My Submissions</button>
+                <button class="pwa-tab" id="pwa-tab-drafts"><span data-i18n="tab_drafts">Drafts</span></button>
+              </div>
+
+              <!-- ===== New submission form ===== -->
+              <div id="pwa-view-new">
+                <h2 data-i18n="new_submission">New Submission</h2>
+                <div id="editing-draft-banner" class="editing-draft-banner">
+                  <span id="editing-draft-banner-text"></span>
+                  <button id="editing-draft-cancel-btn" type="button" data-i18n="cancel">Cancel</button>
+                </div>
+                <div id="pwa-no-form-state" style="display:none;text-align:center;padding:50px 20px;color:var(--ink-soft);opacity:0.75;">
+                  <div style="font-size:34px;margin-bottom:10px;">📭</div>
+                  <div style="font-weight:700;font-size:14px;margin-bottom:4px;" data-i18n="no_form_assigned">No form has been sent to you yet</div>
+                  <div style="font-size:12.5px;" data-i18n="no_form_assigned_sub">Ask your admin to send you a form from the Form Builder.</div>
+                </div>
+
+                <div id="pwa-new-fields">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                  <div style="font-size:12px;color:var(--ink-soft);" id="pwa-form-name">Household Survey — v3</div>
+                  <button type="button" id="download-form-btn" data-i18n="download_form">⬇ Download for offline</button>
+                </div>
+
+                <div class="pwa-field" id="pwa-answers-field" style="margin-top:16px;display:none;">
+                  <label data-i18n="answers_section">Answers</label>
+                  <div id="pwa-answers"></div>
+                </div>
+
+                <div class="pwa-field">
+                  <label id="gps-label" data-i18n="gps_location">GPS location</label>
+                  <div class="gps-box" id="gps-box">
+                    <div data-i18n="gps_prompt">Capture your current location before submitting.</div>
+                    <button class="capture-btn" id="gps-btn" data-i18n="capture_gps">📍 Capture GPS</button>
+                    <div class="gps-status-row" id="gps-status-row" style="display:none;">
+                      <span class="gps-status-text" id="gps-status-text"></span>
+                      <span class="gps-quality-badge" id="gps-quality-badge" style="display:none;"></span>
+                    </div>
+                    <div class="gps-readout" id="gps-readout"></div>
+                  </div>
+                </div>
+
+                <div class="pwa-field">
+                  <label id="photo-label" data-i18n="photo">Photo (optional)</label>
+                  <div class="photo-box" id="photo-box">
+                    <div id="photo-prompt" data-i18n="photo_prompt">Attach a photo of the household or site.</div>
+                    <img id="photo-preview" style="display:none;max-width:100%;border-radius:8px;margin:8px 0 0;" />
+                    <input type="file" id="photo-input-camera" accept="image/*" capture="environment" style="display:none;" />
+                    <input type="file" id="photo-input-library" accept="image/*" style="display:none;" />
+                    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px;">
+                      <button class="capture-btn" id="photo-camera-btn" data-i18n="take_photo">📷 Take Photo</button>
+                      <button class="capture-btn" id="photo-library-btn" style="background:var(--olive);" data-i18n="choose_photo">🖼 Choose from Library</button>
+                      <button class="capture-btn" id="photo-remove-btn" style="background:var(--red);display:none;" data-i18n="remove_photo">🗑 Remove</button>
+                    </div>
+                    <div class="gps-readout" id="photo-readout"></div>
+                  </div>
+                </div>
+
+                <div class="pwa-field">
+                  <label id="voice-label" data-i18n="voice_memo">Voice memo (up to 10 sec)</label>
+                  <div class="mic-box" id="mic-box">
+                    <div id="mic-prompt" data-i18n="mic_prompt">Record a short memo describing this visit (up to 10 seconds — tap Stop to finish early).</div>
+                    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+                      <button class="capture-btn" id="mic-btn" data-i18n="start_recording">🎙 Start Recording</button>
+                      <button class="capture-btn" id="mic-remove-btn" style="background:var(--red);display:none;" data-i18n="remove_voice">🗑 Remove</button>
+                    </div>
+                    <div class="gps-readout" id="mic-readout"></div>
+                  </div>
+                </div>
+
+                <div id="submit-hint" style="display:none;font-size:12px;color:var(--red);margin-top:8px;text-align:center;"></div>
+                <button class="submit-btn" id="submit-btn" disabled data-i18n="submit_data">Submit Data</button>
+                <!-- Independent from submit-btn on purpose: never disabled, no
+                     validation gate. Saves exactly what's on the form right now,
+                     complete or not, including no GPS fix. -->
+                <button type="button" class="save-draft-btn" id="save-draft-btn" data-i18n="save_draft_btn">💾 Save as Draft</button>
+                <div class="save-draft-hint" data-i18n="save_draft_hint">Saves whatever you've filled in so far. Nothing is required — finish it later from the Drafts tab.</div>
+                </div>
+              </div>
+
+              <!-- ===== Submission history ===== -->
+              <div id="pwa-view-history" style="display:none;">
+                <div class="filters" style="margin-bottom:14px;justify-content:space-between;">
+                  <select id="wh-status-filter">
+                    <option value="" data-i18n="all_status">All statuses</option>
+                    <option value="pending" data-i18n="l_pending">Pending</option>
+                    <option value="approved" data-i18n="l_approved">Approved</option>
+                    <option value="rejected" data-i18n="l_rejected">Rejected</option>
+                  </select>
+                  <button type="button" class="btn-outline-teal" id="wh-view-map-btn" data-i18n="view_map">🗺 View Map</button>
+                </div>
+                <div id="pwa-history-list"></div>
+              </div>
+
+              <!-- ===== Offline drafts ===== -->
+              <div id="pwa-view-drafts" style="display:none;">
+                <div id="pwa-drafts-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== WORKER: DOWNLOADED FORMS (page, replaces old sidebar flyout) ===== -->
+        <div class="view" id="view-worker-downloads">
+          <div class="panel">
+            <div class="panel-head">
+              <h3 data-i18n="downloaded_forms">Downloaded Forms</h3>
+            </div>
+            <p style="font-size:13px;color:var(--ink-soft);margin:-6px 0 18px;" data-i18n="downloaded_forms_page_sub">Forms you've saved for offline use. Open one to fill it in even without a connection.</p>
+            <div class="dl-forms-grid" id="dlforms-page-list"></div>
+          </div>
+        </div>
+
+        <!-- ===== ACCOUNT (shared across roles) ===== -->
+        <div class="view" id="view-account">
+          <div class="panel" style="max-width:480px;">
+            <div class="panel-head"><h3 data-i18n="account_settings">Account Settings</h3></div>
+            <p style="font-size:12.5px;color:var(--ink-soft);margin:-6px 0 18px;" data-i18n="account_sub">Update the email and password you use to sign in.</p>
+
+            <label class="field-label" data-i18n="email">Email</label>
+            <input class="input" id="acct-email" type="email" />
+
+            <div id="acct-notify-email-wrap" style="display:none;">
+              <label class="field-label" data-i18n="notify_email_label">Also email me at (optional)</label>
+              <input class="input" id="acct-notify-email" type="email" placeholder="you@gmail.com" />
+              <div style="font-size:11.5px;color:var(--ink-soft);opacity:0.65;margin:-10px 0 16px;" data-i18n="notify_email_hint">When a form is sent to you, we'll also email a copy here — handy if you check Gmail more often than this account's inbox.</div>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--paper);border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px;">
+              <div>
+                <div style="font-weight:600;font-size:13px;" data-i18n="push_notif_title">Push notifications</div>
+                <div style="font-size:11.5px;color:var(--ink-soft);opacity:0.7;margin-top:2px;" id="push-notif-status" data-i18n="push_notif_sub">Get notified on this device, even when the app is closed.</div>
+              </div>
+              <button class="btn-primary" id="push-notif-btn" style="width:auto;padding:8px 16px;font-size:12.5px;flex-shrink:0;" data-i18n="enable">Enable</button>
+            </div>
+
+            <div id="acct-msg" style="display:none;border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:14px;"></div>
+
+            <div style="height:1px;background:var(--line);margin:6px 0 20px;"></div>
+
+            <label class="field-label" data-i18n="current_password">Current password</label>
+            <input class="input" id="acct-current-pass" type="password" placeholder="••••••••" />
+
+            <label class="field-label" data-i18n="new_password">New password <span style="text-transform:none;font-weight:400;opacity:0.7;" data-i18n="optional_hint">(leave blank to keep current password)</span></label>
+            <input class="input" id="acct-new-pass" type="password" placeholder="••••••••" />
+
+            <label class="field-label" data-i18n="confirm_password">Confirm new password</label>
+            <input class="input" id="acct-confirm-pass" type="password" placeholder="••••••••" />
+
+            <button class="btn-primary" id="acct-save-btn" style="width:auto;padding:11px 22px;" data-i18n="save_changes">Save changes</button>
+
+            <div style="height:1px;background:var(--line);margin:24px 0 20px;"></div>
+            <button class="logout-btn on-light" id="logout-btn" style="width:auto;padding:9px 18px;" data-i18n="logout">Log out</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="reject-modal">
+    <div class="modal">
+      <h3 data-i18n="reject_title">Reject submission</h3>
+      <p data-i18n="reject_sub">Explain what needs to be corrected. The worker will see this note.</p>
+      <textarea id="reject-comment" placeholder="e.g. Voice memo is not in English, please re-record…"></textarea>
+      <div class="modal-actions">
+        <button class="m-cancel" id="reject-cancel" data-i18n="cancel">Cancel</button>
+        <button class="m-confirm" id="reject-confirm" data-i18n="reject_confirm">Reject &amp; notify</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generic confirm modal — replaces window.confirm()/alert()/prompt(),
+       which are unreliable (often silently no-op) in an installed/standalone
+       PWA on iOS Safari and some Android WebViews. Driven by confirmDialog()
+       below; the optional text input covers the one "type DELETE" case that
+       used to rely on window.prompt(). -->
+  <!-- GPS accuracy timeout — only shown if the configured accuracy isn't
+       reached within the timeout window. Reuses the same modal-overlay/
+       modal pattern as every other dialog in the app. -->
+  <div class="modal-overlay" id="gps-timeout-modal">
+    <div class="modal">
+      <h3 data-i18n="gps_timeout_title">Unable to obtain high accuracy</h3>
+      <p id="gps-timeout-msg" style="margin-top:6px;"></p>
+      <div class="modal-actions" style="flex-wrap:wrap;">
+        <button class="m-secondary" id="gps-timeout-cancel" data-i18n="cancel">Cancel</button>
+        <button class="m-secondary" id="gps-timeout-retry" data-i18n="retry">Retry</button>
+        <button class="m-confirm" id="gps-timeout-save-anyway" data-i18n="save_anyway">Save Anyway</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="generic-confirm-modal">
+    <div class="modal">
+      <h3 id="gc-title">Confirm</h3>
+      <p id="gc-message" style="margin-top:6px;"></p>
+      <input type="text" id="gc-type-input" class="input" style="display:none;margin-top:10px;margin-bottom:0;" autocomplete="off" autocapitalize="off" spellcheck="false" />
+      <div class="modal-actions">
+        <button class="m-cancel" id="gc-cancel" data-i18n="cancel">Cancel</button>
+        <button class="m-confirm" id="gc-confirm"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="user-modal">
+    <div class="modal">
+      <h3 data-i18n="new_user_title">Create new user</h3>
+      <p data-i18n="new_user_sub">They'll sign in with this email and temporary password.</p>
+      <div id="nu-error" style="display:none;background:rgba(180,67,47,0.1);color:var(--red);border:1px solid rgba(180,67,47,0.3);border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:14px;"></div>
+      <label class="field-label" data-i18n="full_name">Full name</label>
+      <input class="input" id="nu-name" placeholder="e.g. Genet Alemayehu" />
+      <label class="field-label" data-i18n="email">Email</label>
+      <input class="input" id="nu-email" type="email" placeholder="name@geosurvey.et" />
+      <label class="field-label" data-i18n="role">Role</label>
+      <select class="input" id="nu-role">
+        <option value="worker" data-i18n="role_worker">Field Worker</option>
+        <option value="supervisor" data-i18n="role_supervisor">Supervisor</option>
+      </select>
+      <div id="nu-supervisor-wrap">
+        <label class="field-label" data-i18n="assign_supervisor">Assign supervisor</label>
+        <select class="input" id="nu-supervisor"></select>
+      </div>
+      <label class="field-label" data-i18n="temp_password">Temporary password</label>
+      <input class="input" id="nu-password" value="changeme123" />
+      <div class="modal-actions">
+        <button class="m-cancel" id="nu-cancel" data-i18n="cancel">Cancel</button>
+        <button class="m-confirm" id="nu-confirm" style="background:var(--olive);" data-i18n="create_user">Create user</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="send-form-modal">
+    <div class="modal">
+      <h3 data-i18n="send_form_title">Send form to worker</h3>
+      <p data-i18n="send_form_sub">The worker will get a notification and can start collecting with this form.</p>
+      <div id="sf-error" style="display:none;background:rgba(180,67,47,0.1);color:var(--red);border:1px solid rgba(180,67,47,0.3);border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:14px;"></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+        <label class="field-label" style="margin-bottom:0;" data-i18n="select_worker">Worker(s)</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-soft);cursor:pointer;">
+          <input type="checkbox" id="sf-select-all" style="width:15px;height:15px;accent-color:var(--clay);">
+          <span data-i18n="select_all">Select all</span>
+        </label>
+      </div>
+      <div id="sf-worker-list" style="max-height:230px;overflow-y:auto;border:1.5px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px;"></div>
+      <div id="sf-count" style="font-size:12px;color:var(--ink-soft);margin-bottom:14px;"></div>
+      <div class="modal-actions">
+        <button class="m-cancel" id="sf-cancel" data-i18n="cancel">Cancel</button>
+        <button class="m-confirm" id="sf-confirm" style="background:var(--olive);" data-i18n="send_confirm">Send form</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Worker-side: preview of a form sent by the admin, opened from the Alerts list -->
+  <div class="modal-overlay" id="admin-detail-modal">
+    <div class="modal" style="width:520px;max-height:86vh;overflow-y:auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:2px;">
+        <h3 id="ad-title" style="margin:0;">Submission</h3>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="badge" id="ad-status-badge"></span>
+          <button class="row-link" id="ad-edit-btn" title="Edit this submission">✎ Edit</button>
+        </div>
+      </div>
+      <div class="stamp ticket-edge" id="ad-meta" style="color:var(--teal);margin:8px 0 14px;"></div>
+      <div class="field-grid" id="ad-fields"></div>
+      <div id="ad-photo-wrap"></div>
+      <div class="voice-player" id="ad-voice-wrap">
+        <button class="play-btn" id="ad-play-toggle">▶</button>
+        <div class="voice-meta"><strong id="ad-play-label">No recording on file</strong><span id="ad-memo-len"></span></div>
+      </div>
+      <div id="ad-reject-note"></div>
+      <div class="modal-actions" id="ad-edit-actions" style="display:none;">
+        <button class="m-cancel" id="ad-edit-cancel">Cancel</button>
+        <button class="m-confirm" id="ad-edit-save" style="background:var(--olive);">Save changes</button>
+      </div>
+      <div class="modal-actions">
+        <button class="m-cancel" id="ad-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="form-preview-modal">
+    <div class="modal" style="width:460px;">
+      <h3 id="fp-title" data-i18n="preview_form_title">Form preview</h3>
+      <p data-i18n="preview_form_sub">This is what the admin sent you to fill out.</p>
+      <div id="fp-questions" style="max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin-bottom:6px;"></div>
+      <div class="modal-actions">
+        <button class="m-cancel" id="fp-close" data-i18n="close">Close</button>
+        <button class="m-confirm" id="fp-fill-btn" style="background:var(--clay);display:none;" data-i18n="fill_out_form">Continue → GPS, photo & submit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Worker-side: "View Map" from My Submissions — same Leaflet map/base
+       layers as the admin Overview & Map panel, scoped to just this
+       worker's own submissions. -->
+  <div class="modal-overlay" id="worker-map-modal">
+    <div class="modal" id="worker-map-modal-inner" style="width:min(720px,92vw);padding:18px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <h3 style="margin:0;" data-i18n="my_submissions_map">My Submissions Map</h3>
+        <button class="row-link" id="worker-map-close-x" aria-label="Close">✕</button>
+      </div>
+      <div class="map-panel" style="margin-bottom:0;">
+        <div id="worker-map"></div>
+        <div class="map-controls" id="worker-map-controls">
+          <button class="map-controls-toggle" id="worker-map-controls-toggle" type="button">
+            <span>🗂 <span data-i18n="layers">Layers</span></span>
+            <span id="worker-map-controls-chevron">▾</span>
+          </button>
+          <div class="map-controls-body">
+            <div class="layer-group">
+              <div class="g-title" data-i18n="base_layer">Base Layer</div>
+              <div class="layer-opt"><input type="radio" name="worker-baselayer" value="street" checked id="wbl-street"><label for="wbl-street" data-i18n="street">Street</label></div>
+              <div class="layer-opt"><input type="radio" name="worker-baselayer" value="satellite" id="wbl-sat"><label for="wbl-sat" data-i18n="satellite">Satellite</label></div>
+            </div>
+            <div class="layer-group">
+              <div class="g-title" data-i18n="legend">Legend</div>
+              <div class="layer-opt"><span class="legend-dot" style="background:#D9A441"></span><span data-i18n="l_pending">Pending</span></div>
+              <div class="layer-opt"><span class="legend-dot" style="background:#6B7A3F"></span><span data-i18n="l_approved">Approved</span></div>
+              <div class="layer-opt"><span class="legend-dot" style="background:#B4432F"></span><span data-i18n="l_rejected">Rejected</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="m-cancel" id="worker-map-close" data-i18n="close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Real installability: shown only when the browser actually fires
+       beforeinstallprompt (i.e. the app genuinely qualifies as installable) -->
+  <button id="install-app-btn"><span class="mark">G</span><span data-i18n="install_app">Install app</span></button>
+  <div id="ios-install-hint">
+    <button id="ios-install-close" aria-label="Dismiss">✕</button>
+    <strong data-i18n="ios_install_title">Install GeoSurvey</strong><br/>
+    <span data-i18n="ios_install_body">Tap the Share icon, then "Add to Home Screen" to install this app.</span>
+  </div>
+  <div id="update-toast">
+    <span data-i18n="update_available">A new version is ready.</span>
+    <button id="update-reload-btn" data-i18n="update_reload">Reload</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<!-- Export libraries — both pure client-side, no backend needed.
+     xlsx (SheetJS): builds real .xlsx workbooks in-browser.
+     shp-write: builds a zipped Shapefile (.shp/.shx/.dbf/.prj) in-browser.
+     Both served from unpkg, same as Leaflet above, so sw.js's existing
+     cache-first rule for unpkg.com covers these too — no service worker
+     changes needed for them to work offline once cached. -->
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/@mapbox/shp-write@latest/shpwrite.js"></script>
+<!-- Deployment-specific runtime settings (e.g. FILE_API_BASE_URL) — must
+     load before app.js and its modules so window.GEOSURVEY_CONFIG is
+     already set when they initialize. See js/config.js. -->
+<script src="./js/config.js"></script>
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
