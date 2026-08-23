@@ -1,0 +1,415 @@
+rules_version = '2';
+
+// GeoSurvey — Firestore Security Rules
+//
+// Ground rule for this whole file: the client is never trusted. Every
+// role check re-reads the caller's OWN "users/{uid}" document server-side
+// on every single request (not a client-supplied claim, not a cached
+// value) — so a worker cannot read or write as an admin no matter what
+// the page's JavaScript thinks currentUser.role is, and a demoted admin
+// loses access on their very next request, not just their next login.
+//
+// "users/{uid}.role" is therefore the one field this whole file pivots
+// on, which is exactly why ordinary users can never write their own
+// role/active/supervisorId (see users/{uid} below) — if they could, every
+// other rule in this file would be trivially bypassable.
+//
+// One deliberate, narrow exception to "only an admin creates users/{uid}":
+// the first-admin bootstrap below. See isFirstAdminBootstrap() and
+// meta/bootstrap for the full explanation.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function callerDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function callerRole() {
+      return callerDoc().data.get('role', null);
+    }
+
+    function callerActive() {
+      // Field is absent-safe: missing "active" is treated as active,
+      // matching the client's `profile.active !== false` convention.
+      return callerDoc().data.get('active', true) != false;
+    }
+
+    // Every role helper requires the caller to be signed in AND have an
+    // "active" profile — a disabled account loses all read/write access
+    // immediately, not just at its next sign-in attempt.
+    function isAdmin() {
+      return isSignedIn() && callerActive() && callerRole() == 'admin';
+    }
+
+    function isSupervisor() {
+      return isSignedIn() && callerActive() && callerRole() == 'supervisor';
+    }
+
+    function isWorker() {
+      return isSignedIn() && callerActive() && callerRole() == 'worker';
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // True if the given set of top-level field names is exactly the set
+    // that changed between the existing doc and the incoming write.
+    function onlyChangedFields(allowed) {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(allowed);
+    }
+
+    function unchanged(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    // True once the very first admin has been created. Missing doc, or a
+    // doc without a "done" field, both mean "not done yet" — the flag
+    // only ever goes false -> true, never re-created back to false, so
+    // this fails safely open exactly once (before any admin exists) and
+    // safely closed forever after.
+    function bootstrapDone() {
+      return exists(/databases/$(database)/documents/meta/bootstrap)
+        && get(/databases/$(database)/documents/meta/bootstrap).data.get('done', false) == true;
+    }
+
+    // Lets someone create THEMSELVES as the very first admin — the one
+    // gap in "only an admin creates users/{uid}" — but only while
+    // bootstrapDone() is false, and only for a profile that looks exactly
+    // like a freshly-bootstrapped admin: their own uid, role forced to
+    // 'admin', active, and no supervisor/form assignment smuggled in.
+    // Once meta/bootstrap.done flips to true (see that match block
+    // below), this function is permanently false for everyone, and every
+    // subsequent user must go through the normal admin-only create path.
+    function isFirstAdminBootstrap(uid) {
+      return isSelf(uid)
+        && !bootstrapDone()
+        && request.resource.data.role == 'admin'
+        && request.resource.data.active == true
+        && request.resource.data.get('supervisorId', null) == null
+        && request.resource.data.get('supervisor', null) == '—'
+        && request.resource.data.get('assignedFormId', null) == null;
+    }
+
+    // ---------- meta/bootstrap ----------
+    // Single doc: { done, createdBy, createdAt }. Tracks whether the
+    // first-admin bootstrap has already happened. Deliberately readable
+    // by anyone, signed in or not — the login screen needs to know
+    // whether to offer "set up the first admin" before anyone has
+    // authenticated, and a plain boolean flag carries no sensitive data.
+    match /meta/bootstrap {
+      allow read: if true;
+
+      // Can only ever be written to flip done: false -> true (or create
+      // it already true) — never back to false, and never by someone
+      // who isn't signed in (i.e. who hasn't just created the admin
+      // Auth account this flag is meant to gate). This intentionally
+      // does NOT require isAdmin(): at the moment this write happens,
+      // the caller's users/{uid} doc may not exist yet if the client
+      // writes this doc first, so the only enforcement available here is
+      // "must be authenticated, and can only ever set it to true."
+      // Combined with isFirstAdminBootstrap()'s own bootstrapDone()
+      // check on the users/{uid} write, the two together mean at most
+      // one admin can ever be created through this path.
+      allow create: if isSignedIn() && request.resource.data.done == true;
+      allow update: if isSignedIn()
+        && resource.data.done == false
+        && request.resource.data.done == true;
+      allow delete: if false;
+    }
+
+    // ---------- users/{uid} ----------
+    // uid, name, email, role, supervisor, supervisorId, active,
+    // assignedFormId, assignedFormName, assignedFormVersion,
+    // createdAt, updatedAt, fcmTokens
+    match /users/{uid} {
+      // Anyone signed in may read their own profile (needed at login and
+      // for the live self-profile listener). Only admins may read anyone
+      // else's — this is what stops a worker's client from ever pulling
+      // down the full roster (names, emails, active flags, supervisor
+      // assignments) the way an un-scoped `collection(db,'users')` read
+      // would otherwise allow.
+      allow get: if isSelf(uid) || isAdmin();
+      allow list: if isAdmin();
+
+      // Two ways to create a users/{uid} doc:
+      //  1. An admin creates accounts. This intentionally does NOT use
+      //     isSelf(uid) — the admin console creates the Firestore profile
+      //     from the *admin's* authenticated session (via a throwaway
+      //     secondary Auth instance for the sign-up call itself), so the
+      //     request.auth.uid making this write is the admin's, not the
+      //     new user's.
+      //  2. The one-time first-admin bootstrap (see isFirstAdminBootstrap
+      //     above) — the only case where a user is ever allowed to create
+      //     their own users/{uid} doc, and only while no admin exists yet.
+      allow create: if isAdmin() || isFirstAdminBootstrap(uid);
+
+      // Three update paths:
+      //  1. An admin may change anything (role changes, disabling an
+      //     account, reassigning a supervisor, assigning a form, etc).
+      //  2. A user may update their OWN doc, but only "email" (+
+      //     updatedAt) — e.g. the Account Settings screen — or their own
+      //     "fcmTokens" array (registering/removing this device's push
+      //     notification token). They can never touch their own role,
+      //     active flag, supervisorId, or form assignment; letting a user
+      //     self-escalate role/active would break every other rule below
+      //     that trusts this field.
+      allow update: if isAdmin()
+        || (isSelf(uid) && onlyChangedFields(['email', 'updatedAt', 'fcmTokens']));
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- forms/{formId} ----------
+    // name, description, active, questions, version, createdBy,
+    // createdAt, updatedAt
+    match /forms/{formId} {
+      // Every signed-in role needs read: workers to fill out their
+      // assigned/active form, supervisors and admins to preview a form
+      // attached to a submission under review.
+      allow read: if isSignedIn();
+      // Only admins build/edit/delete form templates (Form Builder is an
+      // admin-only screen).
+      allow write: if isAdmin();
+    }
+
+    // ---------- surveyTemplates/{templateId} ----------
+    // name, description, koboFormId, version, sourceFormId, dateImported,
+    // dateModified, createdBy, savedBy, questions
+    //
+    // One immutable doc per version — "Save Template" in the Form Builder
+    // never updates a prior version in place, it always addDoc()s a brand
+    // new doc with an incremented version. Versions can never be edited
+    // in place (update is hard-blocked for everyone), but an admin may
+    // delete a version outright via the Survey Templates page's "Remove"
+    // action — see that create/delete split below.
+    match /surveyTemplates/{templateId} {
+      // Every signed-in role can read: "Use for new survey" and the
+      // Survey Templates history view are reachable from the Form
+      // Builder, which any role that can see a form can open.
+      allow read: if isSignedIn();
+
+      // Only an admin (Form Builder is admin-only) may create a new
+      // version, and only shaped like a real version doc — sourceFormId
+      // must point at an existing forms/{formId} lineage, and
+      // savedBy/createdBy must be attributed to a real, non-forged
+      // identity: createdBy only carries forward from v1's own value
+      // (never invented on a later write), while savedBy is always the
+      // caller writing this particular version.
+      allow create: if isAdmin()
+        && exists(/databases/$(database)/documents/forms/$(request.resource.data.sourceFormId))
+        && request.resource.data.savedBy == request.auth.uid;
+
+      allow update: if false;
+      // Previously hard-blocked for everyone (including admins) to
+      // guarantee old versions were permanent. Now an admin may remove a
+      // version from the Survey Templates page — see the Form Builder's
+      // "Remove" action. Still create-and-read-mostly: no one may ever
+      // edit a version's contents in place, only delete it outright.
+      allow delete: if isAdmin();
+    }
+
+    // ---------- submissions/{submissionId} ----------
+    // submissionId, workerId, workerName, supervisorId, formId,
+    // formVersion, formName, answers, gps, gpsMeta, photoUrl, voiceUrl,
+    // memoLen, status, reviewComment, reviewedBy, reviewedAt, createdAt,
+    // updatedAt, lastEditedBy
+    match /submissions/{docId} {
+      allow read: if isAdmin()
+        || (isSupervisor() && resource.data.supervisorId == request.auth.uid)
+        || (isWorker() && resource.data.workerId == request.auth.uid);
+
+      // A worker may only ever create a submission attributed to
+      // themselves, routed to the supervisor already on file for them
+      // (never a supervisorId of their own choosing), starting in the
+      // 'pending' state with no review fields pre-filled — a client
+      // can't hand itself a pre-approved submission or forge who
+      // reviewed it. Admins may create freely (used by the Kobo import
+      // tool, which writes already-approved records with no worker
+      // attached).
+      allow create: if isAdmin() || (
+        isWorker()
+        && request.resource.data.workerId == request.auth.uid
+        && request.resource.data.supervisorId == callerDoc().data.get('supervisorId', null)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.reviewedBy == null
+        && request.resource.data.reviewedAt == null
+      );
+
+      allow update: if isAdmin()
+        // Supervisor review: only their own queue, only while pending,
+        // only flipping status/review fields — never touching the
+        // worker's actual answer data.
+        || (
+          isSupervisor()
+          && resource.data.supervisorId == request.auth.uid
+          && resource.data.status == 'pending'
+          && (request.resource.data.status == 'approved' || request.resource.data.status == 'rejected')
+          && onlyChangedFields(['status', 'reviewComment', 'reviewedBy', 'reviewedAt', 'updatedAt'])
+        )
+        // Worker correction: only their own submission, only once it's
+        // been rejected, and the resubmission must clear back to pending
+        // with the prior review wiped — never allowed to self-approve or
+        // reassign it to a different supervisor/form.
+        || (
+          isWorker()
+          && resource.data.workerId == request.auth.uid
+          && resource.data.status == 'rejected'
+          && request.resource.data.status == 'pending'
+          && request.resource.data.reviewComment == null
+          && request.resource.data.reviewedBy == null
+          && request.resource.data.reviewedAt == null
+          && unchanged('workerId') && unchanged('supervisorId')
+          && onlyChangedFields([
+               'status', 'gps', 'gpsMeta', 'memoLen', 'photoUrl', 'voiceUrl', 'answers',
+               'formId', 'formVersion', 'formName',
+               'reviewComment', 'reviewedBy', 'reviewedAt', 'updatedAt'
+             ])
+        )
+        // Deferred media attach: a photo/voice upload that failed at
+        // submit time (offline, dropped connection) gets queued
+        // client-side (see auth/uploadQueue.js) and can finish anywhere
+        // from seconds to hours later — well after the submit/resubmit
+        // write above already landed and moved status off 'rejected'.
+        // That follow-up write only ever sets photoUrl/voiceUrl (+
+        // updatedAt) on the worker's OWN submission, and is deliberately
+        // allowed regardless of status being 'pending' or 'rejected' —
+        // but NOT 'approved', so a worker can't use this path to alter
+        // the media on a submission that's already been reviewed and
+        // signed off on. Nothing else about the doc can change through
+        // this branch: status, answers, gps, and every review field are
+        // excluded from onlyChangedFields, so this can never be (ab)used
+        // as a second route to the worker-correction transition above.
+        || (
+          isWorker()
+          && resource.data.workerId == request.auth.uid
+          && resource.data.status != 'approved'
+          && unchanged('status')
+          && onlyChangedFields(['photoUrl', 'voiceUrl', 'updatedAt'])
+        );
+
+      // Admins can delete any submission (e.g. "clear all submissions").
+      // A worker may delete only their own, and only while it's still
+      // pending — once a supervisor has approved or rejected it, it's
+      // part of the record and can only be corrected via resubmission,
+      // never removed.
+      allow delete: if isAdmin() || (
+        isWorker()
+        && resource.data.workerId == request.auth.uid
+        && resource.data.status == 'pending'
+      );
+    }
+    // Audit trail written only alongside an admin's direct edit of a
+    // submission's answers. Never updated once written — "update" stays
+    // permanently blocked so an existing before/after record can't be
+    // silently rewritten. Deletion IS allowed for admins, via the
+    // "select and delete" tool on the Version History page — this is a
+    // deliberate exception to "immutable," not an oversight.
+    match /submissionVersions/{versionId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ---------- reviews/{reviewId} ----------
+    // Immutable per-decision audit log: submissionId, reviewerId, action,
+    // comment, createdAt. Written alongside a submission's approve/reject.
+    match /reviews/{reviewId} {
+      // NOTE: this used to check resource.data.reviewerId == request.auth.uid,
+      // which only lets a supervisor read reviews *they personally wrote*.
+      // The app queries this collection with where('submissionId','==',...)
+      // and no reviewerId filter (see subscribeReviewHistory in index.html),
+      // so Firestore can't prove every doc in that result set satisfies a
+      // reviewerId-based rule and rejects the whole query with
+      // permission-denied — which also happens to fire the instant a
+      // supervisor opens a submission to play its voice memo, making it look
+      // like media playback itself is what's blocked. Basing this on the
+      // submission's supervisorId (like the create rule below already does)
+      // matches what the query actually filters on, and lets a supervisor
+      // read the full review history for any submission that's theirs to
+      // review, not just the reviews they authored.
+      allow read: if isAdmin() || (
+        isSupervisor()
+        && get(/databases/$(database)/documents/submissions/$(resource.data.submissionId)).data.supervisorId == request.auth.uid
+      );
+
+      // Only the supervisor who owns the submission being reviewed may
+      // log a decision, and only attributed to themselves — never
+      // forging another reviewer's name, and never against a submission
+      // outside their own queue.
+      allow create: if isSupervisor()
+        && request.resource.data.reviewerId == request.auth.uid
+        && get(/databases/$(database)/documents/submissions/$(request.resource.data.submissionId)).data.supervisorId == request.auth.uid;
+
+      allow update, delete: if false;
+    }
+
+    // ---------- notifications/{notifId} ----------
+    // userUid, title, comment, submissionId, read, createdAt, type,
+    // formId, formName
+    match /notifications/{notifId} {
+      // A worker only ever reads their own inbox; admins can see all for
+      // support/debugging.
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userUid == request.auth.uid);
+
+      // Who may create a notification, and for whom:
+      //  1. Supervisors (approve/reject) and admins (form assignment)
+      //     generate a notification addressed to someone else (a worker)
+      //     — never a worker paging themselves or a third party.
+      //  2. One narrow, explicit exception: a worker may create a
+      //     "submitted"/"resubmitted" confirmation, but ONLY addressed to
+      //     themselves (userUid must equal their own uid) and ONLY with
+      //     one of those two exact type values — they still can never
+      //     create an "approved"/"form_assign" notification, never
+      //     address one to a different user.
+      allow create: if isAdmin() || isSupervisor() || (
+        isWorker()
+        && request.resource.data.userUid == request.auth.uid
+        && request.resource.data.type in ['submitted', 'resubmitted']
+      );
+
+      // The only client-side mutation is a worker marking their own
+      // notification(s) as read (app.js's markNotificationsRead(), fired
+      // when the bell dropdown is opened) — restricted to flipping ONLY
+      // the `read` field on a notification they own, so a worker can't
+      // rewrite the title/comment/type or reassign it to themselves.
+      allow update: if isSignedIn()
+        && resource.data.userUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userUid == request.auth.uid);
+    }
+
+    // ---------- settings/app ----------
+    // Global app config: interfaceLang, defaultExportFormat, updatedAt,
+    // updatedByRef. Every signed-in role reads it live; only admins
+    // (Settings is an admin-only screen) write it.
+    match /settings/app {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+
+      // settings/app/koboCatalog/{formId} — the imported Kobo form
+      // catalog, browsed only from the admin-only Import Data screen.
+      // Treated as read-only from the client: nothing in this app writes
+      // it, so it's assumed to be populated by a trusted backend
+      // integration, not end-user input.
+      match /koboCatalog/{catalogId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+
+    // Default deny for anything not explicitly matched above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
