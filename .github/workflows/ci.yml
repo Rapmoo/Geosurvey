@@ -1,0 +1,215 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same branch/PR to save minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_LTS: '20.x'
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1. Install — fail fast if either package manifest can't install
+  #    cleanly, before spending time on anything else.
+  # ---------------------------------------------------------------
+  install:
+    name: Install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_LTS }}
+          cache: 'npm'
+
+      - name: Install root dependencies (Express API)
+        run: npm ci
+
+      - name: Install Backend dependencies (Cloud Function manifest)
+        working-directory: Backend
+        run: npm ci
+
+  # ---------------------------------------------------------------
+  # 2. Lint
+  # ---------------------------------------------------------------
+  lint:
+    name: Lint
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_LTS }}
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: ESLint (Backend + PWA)
+        run: npm run lint
+
+  # ---------------------------------------------------------------
+  # 3. Run Tests
+  # ---------------------------------------------------------------
+  test:
+    name: Run Tests
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        if: matrix.node-version == env.NODE_LTS
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  # ---------------------------------------------------------------
+  # 4. Build — syntax-check every source file, validate JSON config,
+  #    and package a deploy-ready dist/ artifact.
+  # ---------------------------------------------------------------
+  build:
+    name: Build
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_LTS }}
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
+
+  # ---------------------------------------------------------------
+  # 5. Security Scan — secret scanning across the diff/history.
+  #    Catches things like committed service-account keys or API
+  #    tokens before they reach main.
+  # ---------------------------------------------------------------
+  security_scan:
+    name: Security Scan
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------
+  # 6. Dependency Audit — known-vulnerability scan of both package
+  #    manifests. Fails on high/critical findings.
+  # ---------------------------------------------------------------
+  dependency_audit:
+    name: Dependency Audit
+    needs: security_scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_LTS }}
+          cache: 'npm'
+
+      - name: Audit root dependencies (Express API)
+        run: npm audit --audit-level=high
+
+      - name: Audit Backend dependencies (Cloud Function manifest)
+        working-directory: Backend
+        run: npm audit --audit-level=high
+
+  # ---------------------------------------------------------------
+  # 7. Deploy — main branch only, after every prior gate passes.
+  #    Uses the dist/ artifact built in step 4 rather than
+  #    re-building at deploy time.
+  # ---------------------------------------------------------------
+  deploy:
+    name: Deploy
+    needs: dependency_audit
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_LTS }}
+
+      - name: Deploy to Firebase (Functions + Firestore rules/indexes)
+        working-directory: dist
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp-key.json
+        run: |
+          echo "$FIREBASE_SERVICE_ACCOUNT" > "$GOOGLE_APPLICATION_CREDENTIALS"
+          npx --yes firebase-tools@latest deploy \
+            --only functions,firestore:rules,firestore:indexes \
+            --project geosurvey-update \
+            --non-interactive
+          rm -f "$GOOGLE_APPLICATION_CREDENTIALS"
+
+# ---------------------------------------------------------------------
+# Setup notes (Deploy stage)
+# ---------------------------------------------------------------------
+# 1. Create a service account in the geosurvey-update GCP project scoped
+#    to deploys only (roles/firebase.admin, or narrower:
+#    roles/cloudfunctions.developer + roles/firebaserules.admin).
+# 2. Download its JSON key and store the *entire file contents* as a
+#    repository secret named FIREBASE_SERVICE_ACCOUNT
+#    (Settings → Secrets and variables → Actions).
+# 3. Create a GitHub Environment named "production" (Settings →
+#    Environments) and optionally require manual approval before
+#    deploys run — this gives you a review gate on top of the
+#    automated checks above.
+# 4. The serviceAccountKey.json already sitting in Backend/ is
+#    gitignored and is a *separate* local-dev credential — don't
+#    reuse it for this workflow, and consider rotating it since it's
+#    an unscoped Admin SDK key living on disk.
