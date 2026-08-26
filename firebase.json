@@ -1,0 +1,23 @@
+{
+  "firestore": {
+    "rules": "Firebase Authentication/firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": [
+    {
+      "source": "Backend",
+      "codebase": "default",
+      "runtime": "nodejs20",
+      "ignore": [
+        "node_modules",
+        ".env",
+        ".env.example",
+        ".gitignore",
+        "__tests__",
+        "scripts",
+        "storage",
+        "*.log"
+      ]
+    }
+  ]
+}
