@@ -1,0 +1,62 @@
+# ===================================================================
+# docker-compose.yml
+# -------------------------------------------------------------------
+# Two services:
+#   backend — the Express API (root Dockerfile), port 8080
+#   pwa     — static frontend behind nginx (PWA/Dockerfile), port 8000
+#
+# Nothing in Backend/.env needs to change for this to work as-is:
+# ALLOWED_ORIGINS already points at http://localhost:8000 and
+# PWA/js/app.js already hardcodes KOBO_API_BASE = 'http://localhost:8080',
+# so the browser reaches both containers the same way it reaches two
+# local dev servers today.
+#
+# Prereqs before `docker compose up --build`:
+#   - Backend/.env must exist (it's gitignored — copy it in yourself;
+#     this compose file does not create or commit it)
+#   - Backend/serviceAccountKey.json must exist (also gitignored)
+# Neither file is ever baked into an image — both are bind-mounted in
+# below, same as .dockerignore keeps them out of the build context.
+# ===================================================================
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geosurvey-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - ./Backend/.env
+    volumes:
+      # Real uploaded submission data (photos/audio/documents) — must
+      # survive image rebuilds and redeploys, so it lives on a named
+      # volume rather than inside the container filesystem. This is
+      # /app/storage, not /app/Backend/storage — see the Dockerfile
+      # comment on why STORAGE_ROOT resolves there.
+      - geosurvey-storage:/app/storage
+      # Firebase Admin SDK credential — read-only, never copied into
+      # the image (see .dockerignore).
+      - ./Backend/serviceAccountKey.json:/app/Backend/serviceAccountKey.json:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  pwa:
+    build:
+      context: ./PWA
+      dockerfile: Dockerfile
+    container_name: geosurvey-pwa
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    depends_on:
+      - backend
+
+volumes:
+  geosurvey-storage:
+    name: geosurvey-storage
